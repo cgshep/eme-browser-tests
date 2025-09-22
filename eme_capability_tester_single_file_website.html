@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EME Capability Tester</title>
+  <style>
+    :root { --bg:#0b0c10; --fg:#e6e6e6; --muted:#a0a0a0; --accent:#8bc34a; --warn:#ffc107; --err:#ff5252; --card:#15171d; }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"}
+    header{padding:24px 20px;border-bottom:1px solid #222;background:linear-gradient(180deg,#0f1117,#0b0c10)}
+    h1{margin:0 0 8px;font-size:22px}
+    p.subtitle{margin:0;color:var(--muted)}
+    main{max-width:1200px;margin:0 auto;padding:20px;}
+    .row{display:grid;grid-template-columns: 1fr; gap:16px}
+    @media(min-width:900px){ .row{grid-template-columns: 2.2fr 1fr} }
+    .card{background:var(--card);border:1px solid #222;border-radius:14px;padding:16px;box-shadow:0 1px 0 #0006}
+    .card h2{margin:0 0 8px;font-size:18px}
+    .muted{color:var(--muted)}
+    code, pre{background:#0f1117;border:1px solid #222;border-radius:10px;padding:2px 6px}
+    table{width:100%;border-collapse:collapse;margin-top:10px}
+    th, td{border-bottom:1px solid #222;padding:8px 6px;text-align:left;font-size:14px}
+    th{position:sticky;top:0;background:#111}
+    .pill{display:inline-block;border:1px solid #333;border-radius:999px;padding:2px 8px;font-size:12px}
+    .ok{color:#1db954}
+    .warn{color:var(--warn)}
+    .err{color:var(--err)}
+    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    button{background:#1f6feb;color:white;border:0;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .log{height:220px;overflow:auto;background:#0f1117;border:1px solid #222;border-radius:10px;padding:10px;font-family:ui-monospace,SFMono-Regular,Consolas,Monaco,Menlo,monospace;font-size:12px}
+    .kv{display:grid;grid-template-columns:200px 1fr;gap:4px;margin-top:6px}
+    .kv div{padding:4px 0;border-bottom:1px dashed #2a2a2a}
+    .badge{font-size:11px;padding:2px 6px;border-radius:999px;border:1px solid #2a2a2a;color:#c7c7c7}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Encrypted Media Extensions (EME) Capability Tester</h1>
+    <p class="subtitle">Locally probes your browser for EME features, key systems, robustness levels, and MIME support. No media or licenses are fetched.</p>
+  </header>
+  <main>
+    <div class="row">
+      <section class="card">
+        <h2>Results</h2>
+        <div id="env" class="kv"></div>
+        <div style="margin-top:14px">
+          <strong>Overall EME:</strong> <span id="emeSupport" class="pill"></span>
+        </div>
+
+        <h3 style="margin-top:18px">Key System Summary</h3>
+        <table id="summary">
+          <thead>
+            <tr>
+              <th>Key System</th>
+              <th>Status</th>
+              <th>Sessions</th>
+              <th>Distinctive ID</th>
+              <th>Persistent State</th>
+              <th>Init Data</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+
+        <h3 style="margin-top:18px">Video Capability Matrix</h3>
+        <table id="videoCaps">
+          <thead>
+            <tr>
+              <th>Key System</th>
+              <th>MIME + Codec</th>
+              <th>Robustness</th>
+              <th>Supported</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+
+        <h3 style="margin-top:18px">Audio Capability Matrix</h3>
+        <table id="audioCaps">
+          <thead>
+            <tr>
+              <th>Key System</th>
+              <th>MIME + Codec</th>
+              <th>Robustness</th>
+              <th>Supported</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <aside class="card">
+        <h2>Controls</h2>
+        <div class="grid-2">
+          <button id="run">Run Tests</button>
+          <button id="clear">Clear</button>
+        </div>
+        <div style="margin-top:14px" class="muted">Tests attempt several <code>MediaKeySystemConfiguration</code>s per system, including robustness strings. Only local API probing is performed.</div>
+
+        <h3 style="margin-top:18px">Diagnostics</h3>
+        <div class="log" id="log"></div>
+
+        <h3 style="margin-top:18px">Notes</h3>
+        <ul class="muted">
+          <li>"Supported" here means the <em>browser</em> accepted the requested configuration. Actual playback also depends on licenses and media encryption.</li>
+          <li>Robustness meanings are vendor-specific. Widevine examples: <code>SW_SECURE_*</code>, <code>HW_SECURE_*</code>. PlayReady uses different tokens. FairPlay ignores robustness.</li>
+          <li>Clear Key is standardized (<code>org.w3.clearkey</code>) and useful to sanity-check your EME stack without a DRM backend.</li>
+        </ul>
+      </aside>
+    </div>
+
+    <template id="row">
+      <tr>
+        <td class="ks"></td>
+        <td class="status"></td>
+        <td class="sessions"></td>
+        <td class="di"></td>
+        <td class="ps"></td>
+        <td class="idt"></td>
+      </tr>
+    </template>
+  </main>
+
+  <script>
+    const $ = (sel, el=document) => el.querySelector(sel);
+    const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
+    const log = (m) => { const el = document.getElementById('log'); el.textContent += m + "\n"; el.scrollTop = el.scrollHeight; }
+
+    function setEnv() {
+      const env = document.getElementById('env');
+      const items = {
+        "User Agent": navigator.userAgent,
+        "Platform": navigator.platform,
+        "EME API": typeof navigator.requestMediaKeySystemAccess === 'function' ? 'Available' : 'Missing',
+        "MSE API": typeof window.MediaSource !== 'undefined' ? 'Available' : 'Missing',
+        "Autoplay Policy": (navigator.mediaCapabilities? 'MediaCapabilities present' : 'No MediaCapabilities'),
+      };
+      env.innerHTML = Object.entries(items).map(([k,v])=>`<div><strong>${k}</strong></div><div>${v}</div>`).join('');
+    }
+
+    const KEY_SYSTEMS = [
+      { id: 'com.widevine.alpha', label: 'Widevine' },
+      { id: 'com.microsoft.playready', label: 'PlayReady' },
+      { id: 'com.apple.fps.1_0', label: 'FairPlay (EME)' },
+      { id: 'org.w3.clearkey', label: 'Clear Key' },
+    ];
+
+    const INIT_DATA_TYPES = ['cenc','keyids','webm'];
+
+    const VIDEO_TYPES = [
+      "video/mp4; codecs=\"avc1.42E01E\"",   // H.264 baseline
+      "video/mp4; codecs=\"avc1.4D401E\"",   // H.264 main
+      "video/mp4; codecs=\"hvc1.1.6.L93.B0\"", // HEVC (may require HW)
+      "video/webm; codecs=\"vp9\"",
+      "video/webm; codecs=\"av1\"",
+      "video/mp4; codecs=\"av01.0.05M.08\"", // AV1 in MP4
+    ];
+
+    const AUDIO_TYPES = [
+      "audio/mp4; codecs=\"mp4a.40.2\"", // AAC LC
+      "audio/webm; codecs=\"opus\"",
+    ];
+
+    const WIDEVINE_ROB = ["","SW_SECURE_DECODE","SW_SECURE_CRYPTO","HW_SECURE_DECODE","HW_SECURE_CRYPTO","HW_SECURE_ALL"];
+    const PLAYREADY_ROB = ["","3000","2000","150","100"];
+    const FAIRPLAY_ROB = [""];
+    const CLEARKEY_ROB = [""];
+
+    function robustnessList(ks){
+      if (ks === 'com.widevine.alpha') return WIDEVINE_ROB;
+      if (ks === 'com.microsoft.playready') return PLAYREADY_ROB;
+      if (ks === 'com.apple.fps.1_0') return FAIRPLAY_ROB;
+      return CLEARKEY_ROB;
+    }
+
+    function buildConfigs(ks){
+      const robs = robustnessList(ks);
+      const videoCaps = [];
+      const audioCaps = [];
+
+      for (const mime of VIDEO_TYPES){
+        for (const r of robs){
+          videoCaps.push({ contentType: mime, robustness: r });
+        }
+      }
+      for (const mime of AUDIO_TYPES){
+        for (const r of robs){
+          audioCaps.push({ contentType: mime, robustness: r });
+        }
+      }
+
+      // Try a sequence of increasing requirements; first permissive, then persistent/DI.
+      const configs = [
+        { initDataTypes: INIT_DATA_TYPES, distinctiveIdentifier: 'not-allowed', persistentState: 'optional', sessionTypes: ['temporary'], videoCapabilities: videoCaps, audioCapabilities: audioCaps },
+        { initDataTypes: INIT_DATA_TYPES, distinctiveIdentifier: 'optional', persistentState: 'required', sessionTypes: ['temporary','persistent-license'], videoCapabilities: videoCaps, audioCapabilities: audioCaps },
+        { initDataTypes: INIT_DATA_TYPES, distinctiveIdentifier: 'required', persistentState: 'required', sessionTypes: ['persistent-license'], videoCapabilities: videoCaps, audioCapabilities: audioCaps },
+      ];
+      return configs;
+    }
+
+    function addSummaryRow({ksLabel, ks, status, sessions, di, ps, idt}){
+      const tbody = document.querySelector('#summary tbody');
+      const tr = document.importNode(document.getElementById('row').content, true);
+      tr.querySelector('.ks').textContent = `${ksLabel} (${ks})`;
+      tr.querySelector('.status').innerHTML = status;
+      tr.querySelector('.sessions').textContent = sessions.join(', ') || '—';
+      tr.querySelector('.di').textContent = di;
+      tr.querySelector('.ps').textContent = ps;
+      tr.querySelector('.idt').textContent = idt.join(', ') || '—';
+      tbody.appendChild(tr);
+    }
+
+    function addCapRow(tableId, ksLabel, ks, cap, supported){
+      const tbody = document.querySelector(`#${tableId} tbody`);
+      const tr = document.createElement('tr');
+      const sup = supported ? '<span class="ok">Yes</span>' : '<span class="err">No</span>';
+      tr.innerHTML = `<td>${ksLabel} (${ks})</td><td><code>${cap.contentType}</code></td><td>${cap.robustness || '—'}</td><td>${sup}</td>`;
+      tbody.appendChild(tr);
+    }
+
+    async function probeKeySystem(ksObj){
+      const { id: ks, label: ksLabel } = ksObj;
+      const configs = buildConfigs(ks);
+
+      try{
+        const access = await navigator.requestMediaKeySystemAccess(ks, configs);
+        const conf = access.getConfiguration();
+        log(`[${ks}] Supported. Chosen configuration: DI=${conf.distinctiveIdentifier}, PS=${conf.persistentState}, Sessions=${(conf.sessionTypes||[]).join('/')}`);
+
+        // summary row
+        addSummaryRow({
+          ksLabel, ks,
+          status: '<span class="ok">Supported</span>',
+          sessions: conf.sessionTypes || [],
+          di: conf.distinctiveIdentifier,
+          ps: conf.persistentState,
+          idt: conf.initDataTypes || []
+        });
+
+        // capability matrices
+        const chosenV = conf.videoCapabilities || [];
+        const chosenA = conf.audioCapabilities || [];
+        for(const vc of chosenV){ addCapRow('videoCaps', ksLabel, ks, vc, true); }
+        for(const ac of chosenA){ addCapRow('audioCaps', ksLabel, ks, ac, true); }
+
+        // Extra: try creating MediaKeys and a session where permitted
+        try{
+          const keys = await access.createMediaKeys();
+          if ((conf.sessionTypes||[]).includes('temporary')){
+            const sess = keys.createSession('temporary');
+            sess.addEventListener('message', (e)=>log(`[${ks}] Session message event (len=${e.message.byteLength})`));
+            // We don't call generateRequest with real initData to avoid network/license flows.
+          }
+        }catch(e){
+          log(`[${ks}] createMediaKeys/session failed: ${e.message}`);
+        }
+
+        return { ks, ok: true };
+      } catch(e){
+        log(`[${ks}] Not supported or rejected: ${e.message}`);
+        addSummaryRow({ ksLabel, ks, status: '<span class="err">Not available</span>', sessions: [], di: '—', ps: '—', idt: [] });
+
+        // Even if the aggregate config failed, show container support guesses via MSE
+        const robs = robustnessList(ks);
+        for(const mime of VIDEO_TYPES){
+          const supported = (window.MediaSource && MediaSource.isTypeSupported) ? MediaSource.isTypeSupported(mime) : false;
+          addCapRow('videoCaps', ksLabel, ks, { contentType: mime, robustness: robs[0] }, false && supported);
+        }
+        for(const mime of AUDIO_TYPES){
+          const supported = (window.MediaSource && MediaSource.isTypeSupported) ? MediaSource.isTypeSupported(mime) : false;
+          addCapRow('audioCaps', ksLabel, ks, { contentType: mime, robustness: robs[0] }, false && supported);
+        }
+        return { ks, ok: false };
+      }
+    }
+
+    async function run(){
+      setEnv();
+      const eme = typeof navigator.requestMediaKeySystemAccess === 'function';
+      const badge = document.getElementById('emeSupport');
+      badge.textContent = eme ? 'Available' : 'Missing';
+      badge.className = 'pill ' + (eme ? 'ok' : 'err');
+      if (!eme){ log('EME API missing in this browser.'); return; }
+
+      // Clear tables
+      ['summary','videoCaps','audioCaps'].forEach(id=>{ $(`#${id} tbody`).innerHTML=''; });
+
+      for (const ks of KEY_SYSTEMS){
+        await probeKeySystem(ks);
+      }
+
+      log('Done.');
+    }
+
+    function clearAll(){
+      $$('#summary tbody, #videoCaps tbody, #audioCaps tbody').forEach(t=> t.innerHTML = '');
+      $('#log').textContent = '';
+      setEnv();
+      const badge = document.getElementById('emeSupport');
+      badge.textContent = '';
+      badge.className = 'pill';
+    }
+
+    document.getElementById('run').addEventListener('click', run);
+    document.getElementById('clear').addEventListener('click', clearAll);
+
+    // Auto-run on load
+    window.addEventListener('load', ()=>{
+      setEnv();
+      run();
+    });
+  </script>
+</body>
+</html>
